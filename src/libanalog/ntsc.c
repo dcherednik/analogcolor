@@ -76,7 +76,6 @@ static void ntsc_create_generator(struct ntsc_ctx* ctx)
 	int i = 0;
 	int n = 2 * ctx->width;
 	float width = ctx->width;
-	//fprintf(stderr, "width: %f\n", width);
 	//TODO: tune the freq
 	int f = (int)(width / 2.5) | 0x01;
 	ctx->generator.sin_table = malloc(sizeof(float) * n);
@@ -119,23 +118,8 @@ void ntsc_free_context(ntsc_ctx* ctx)
 	free(ctx);
 }
 
-static void ntsc_modulate_line(ntsc_ctx* ctx, float* out)
+static void ntsc_next_line(ntsc_ctx* ctx)
 {
-	int i;
-	float* sin = ctx->generator.sin_table;
-	float* cos = ctx->generator.cos_table;
-	if (ctx->generator.shift) {
-		sin += ctx->width;
-		cos += ctx->width;
-	}
-	//fprintf(stderr, "sin : %f %f %f %f %f ... %f\n", sin[0], sin[1], sin[2], sin[3], sin[4], sin[ctx->width - 1]);
-	//fprintf(stderr, "cos : %f %f %f %f %f ... %f\n", cos[0], cos[1], cos[2], cos[3], cos[4], cos[ctx->width - 1]);
-
-	for (i = 0; i < ctx->width; i++) {
-		struct ntsc_iq* iq = ctx->iq + i;
-		out[i] += iq->ei * sin[i] + iq->eq * cos[i];
-	}
-
 	if (ctx->generator.shift) {
 		ctx->generator.shift = 0;
 	} else {
@@ -143,6 +127,35 @@ static void ntsc_modulate_line(ntsc_ctx* ctx, float* out)
 	}
 }
 
+static void ntsc_modulate_line(ntsc_ctx* ctx, const struct ntsc_iq* in, float* out)
+{
+	int i;
+	float* sin = ctx->generator.sin_table;
+	float* cos = ctx->generator.cos_table;
+
+	const int chroma_shift = 3;
+	if (ctx->generator.shift) {
+		sin += ctx->width;
+		cos += ctx->width;
+	}
+
+	for (i = 0; i < chroma_shift; i++) {
+		const struct ntsc_iq* iq = in + i;
+		(void)(ntsc_process_filter(&ctx->i_filter, iq->ei * sin[i]));
+		(void)(ntsc_process_filter(&ctx->q_filter, iq->eq * cos[i]));
+	}
+
+	for (i = chroma_shift; i < ctx->width; i++) {
+		const struct ntsc_iq* iq = in + i;
+		int j = i - chroma_shift;
+		out[j] = ntsc_process_filter(&ctx->i_filter, iq->ei) * sin[j] + ntsc_process_filter(&ctx->q_filter, iq->eq) * cos[j];
+	}
+
+	for (i = 0; i < chroma_shift; i++) {
+		int j = i - chroma_shift + ctx->width;
+		out[j] = ntsc_process_filter(&ctx->i_filter, 0.0) * sin[j] + ntsc_process_filter(&ctx->q_filter, 0.0) * cos[j];
+	}
+}
 
 static void ntsc_demodulate_line(const float* input, ntsc_ctx* ctx)
 {
@@ -177,13 +190,6 @@ static void ntsc_demodulate_line(const float* input, ntsc_ctx* ctx)
 		iq->ei = ntsc_process_filter(&ctx->i_filter, 0.0) * 2.0;
 		iq->eq = ntsc_process_filter(&ctx->q_filter, 0.0) * 2.0;
 	}
-
-	if (ctx->generator.shift) {
-		ctx->generator.shift = 0;
-	} else {
-		ctx->generator.shift = 1;
-	}
-
 }
 
 void ntsc_process_encode(const float* input, float* output, ntsc_ctx* ctx)
@@ -191,9 +197,15 @@ void ntsc_process_encode(const float* input, float* output, ntsc_ctx* ctx)
 	int i;
 	for (i = 0; i < ctx->width; i++) {
 		ntsc_rgb_to_iq(input + i * 3, (ctx->iq + i));
-		output[i] = ntsc_rgb_to_y(input + i * 3);
 	}
-	ntsc_modulate_line(ctx, output);
+
+	ntsc_modulate_line(ctx, ctx->iq, output);
+
+	for (i = 0; i < ctx->width; i++) {
+		output[i] += ntsc_rgb_to_y(input + i * 3);
+	}
+
+	ntsc_next_line(ctx);
 }
 
 void ntsc_process_decode(const float* input, float* output, ntsc_ctx* ctx)
@@ -207,4 +219,5 @@ void ntsc_process_decode(const float* input, float* output, ntsc_ctx* ctx)
 		ntsc_iqy_to_rgb(iq, input[i], output + i * 3);
 	}
 
+	ntsc_next_line(ctx);
 }
