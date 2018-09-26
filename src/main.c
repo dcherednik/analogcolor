@@ -22,12 +22,15 @@ void print_usage(const char* self_name)
 
 int main(int argc, char** argv)
 {
-	if (argc != 4)
+	if (argc != 4 && argc != 5) {
 		print_usage(argv[0]);
+		return 1;
+	}
 
 	const char* input_file = argv[2];
 	const char* output_file = argv[3];
 	const int encode = *argv[1] == 'e';
+	int verbose = 0;
 
 	int width, height, components, out_components;
 	int line = 0;
@@ -36,6 +39,11 @@ int main(int argc, char** argv)
 
 	unsigned char* input_image = stbi_load(input_file,
 		&width, &height, &components, encode ? STBI_rgb : STBI_grey);
+
+	if (argc == 5)
+		if (*argv[4] == 'v')
+			verbose = 1;
+
 
 	if (!input_image) {
 		fprintf(stderr, "Unable to load image\n");
@@ -52,6 +60,9 @@ int main(int argc, char** argv)
 	components = encode ? 3 : 1;
 
 	ntsc_ctx* ctx = ntsc_create_context(width, encode);
+
+	if (verbose)
+		ntsc_enable_verbose(stderr, ctx);
 
 	if (!ctx) {
 		fprintf(stderr, "Unable to crete ntsc context\n");

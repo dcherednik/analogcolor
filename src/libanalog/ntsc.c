@@ -17,11 +17,16 @@ struct biquad_filter_ctx {
 	float z1, z2;
 };
 
+struct verbose_ctx {
+	FILE* fout;
+};
+
 struct ntsc_ctx {
 
 	struct generator_ctx {
 		float* sin_table;
 		float* cos_table;
+		int f;
 		int shift;
 	} generator;
 	uint16_t width;
@@ -29,6 +34,8 @@ struct ntsc_ctx {
 
 	struct biquad_filter_ctx i_filter;
 	struct biquad_filter_ctx q_filter;
+
+	struct verbose_ctx* verbose;
 };
 
 static void ntsc_filter_init(struct biquad_filter_ctx* filter, float fc)
@@ -77,12 +84,12 @@ static void ntsc_create_generator(struct ntsc_ctx* ctx)
 	int n = 2 * ctx->width;
 	float width = ctx->width;
 	//TODO: tune the freq
-	int f = (int)(width / 2.5) | 0x01;
+	ctx->generator.f = (int)(width / 2.5) | 0x01;
 	ctx->generator.sin_table = malloc(sizeof(float) * n);
 	ctx->generator.cos_table = malloc(sizeof(float) * n);
 	for (i = 0; i < n; i++) {
-		ctx->generator.sin_table[i] = sin(f * i * M_PI/width);
-		ctx->generator.cos_table[i] = cos(f * i * M_PI/width);
+		ctx->generator.sin_table[i] = sin(ctx->generator.f * i * M_PI/width);
+		ctx->generator.cos_table[i] = cos(ctx->generator.f * i * M_PI/width);
 	}
 	ctx->generator.shift = 0;
 }
@@ -108,14 +115,32 @@ ntsc_ctx* ntsc_create_context(int width, int encode)
 
 	ntsc_filter_init(&p->i_filter, 0.08);
 	ntsc_filter_init(&p->q_filter, 0.05);
+	p->verbose = NULL;
 	return p;
 }
 
 void ntsc_free_context(ntsc_ctx* ctx)
 {
+	if (ctx->verbose)
+		free(ctx->verbose);
 	ntsc_free_generator(ctx);
 	free(ctx->iq);
 	free(ctx);
+}
+
+static void verbose_carrier(ntsc_ctx* ctx)
+{
+	float t = (ctx->width * 2) / (float)ctx->generator.f;
+	fprintf(ctx->verbose->fout, "Width: %d pixels\n", ctx->width);
+	fprintf(ctx->verbose->fout, "Carrier: period is %f pixels (%f of Fmax)\n", t, 2/t);
+}
+
+void ntsc_enable_verbose(FILE* fout, ntsc_ctx* ctx)
+{
+	ctx->verbose = malloc(sizeof(struct verbose_ctx));
+	ctx->verbose->fout = fout;
+	fprintf(ctx->verbose->fout, "Verbose output enabled\n");
+	verbose_carrier(ctx);
 }
 
 static void ntsc_next_line(ntsc_ctx* ctx)
