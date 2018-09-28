@@ -31,6 +31,8 @@ struct ntsc_ctx {
 	} generator;
 	uint16_t width;
 	struct ntsc_iq* iq;
+	float* luma;
+	float* chroma;
 
 	struct biquad_filter_ctx i_filter;
 	struct biquad_filter_ctx q_filter;
@@ -112,6 +114,8 @@ ntsc_ctx* ntsc_create_context(int width, int encode)
 	p->width = width;
 	ntsc_create_generator(p);
 	p->iq = malloc(sizeof(struct ntsc_iq) * width);
+	p->luma = calloc(width, sizeof(float));
+	p->chroma = calloc(width, sizeof(float));
 
 	ntsc_filter_init(&p->i_filter, 0.08);
 	ntsc_filter_init(&p->q_filter, 0.05);
@@ -124,6 +128,8 @@ void ntsc_free_context(ntsc_ctx* ctx)
 	if (ctx->verbose)
 		free(ctx->verbose);
 	ntsc_free_generator(ctx);
+	free(ctx->luma);
+	free(ctx->chroma);
 	free(ctx->iq);
 	free(ctx);
 }
@@ -237,11 +243,25 @@ void ntsc_process_decode(const float* input, float* output, ntsc_ctx* ctx)
 {
 	int i;
 
-	ntsc_demodulate_line(input, ctx);
+	for (i = 0; i < ctx->width; i++) {
+		float* l = ctx->luma + i;
+		float* c = ctx->chroma + i;
+		*l = (input[i] + *l) / 2.0;
+		*c = (input[i] - *c) / 2.0;
+	}
+
+	ntsc_demodulate_line(ctx->chroma, ctx);
 
 	for (i = 0; i < ctx->width; i++) {
 		struct ntsc_iq* iq = ctx->iq + i;
-		ntsc_iqy_to_rgb(iq, input[i], output + i * 3);
+		ntsc_iqy_to_rgb(iq, ctx->luma[i], output + i * 3);
+	}
+
+	for (i = 0; i < ctx->width; i++) {
+		float* l = ctx->luma + i;
+		float* c = ctx->chroma + i;
+		*l = input[i];
+		*c = input[i];
 	}
 
 	ntsc_next_line(ctx);
