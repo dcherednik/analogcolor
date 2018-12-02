@@ -1,11 +1,15 @@
+#include "libgha/include/libgha.h"
+
 #include "ntsc.h"
 
 #include <stdlib.h>
 #include <stdint.h>
 
 #include <stdio.h>
+#include <string.h>
 
 #include <math.h>
+#include <assert.h>
 
 struct ntsc_iq {
 	float ei;
@@ -38,6 +42,8 @@ struct ntsc_ctx {
 	struct biquad_filter_ctx q_filter;
 
 	struct verbose_ctx* verbose;
+	uint16_t filter_width;
+	gha_ctx_t gha;
 };
 
 static void ntsc_filter_init(struct biquad_filter_ctx* filter, float fc)
@@ -86,7 +92,7 @@ static void ntsc_create_generator(struct ntsc_ctx* ctx)
 	int n = 2 * ctx->width;
 	float width = ctx->width;
 	//TODO: tune the freq
-	ctx->generator.f = (int)(width / 2.5) | 0x01;
+	ctx->generator.f = (int)(width / 1.46) | 0x01;
 	ctx->generator.sin_table = malloc(sizeof(float) * n);
 	ctx->generator.cos_table = malloc(sizeof(float) * n);
 	for (i = 0; i < n; i++) {
@@ -120,6 +126,8 @@ ntsc_ctx* ntsc_create_context(int width, int encode)
 	ntsc_filter_init(&p->i_filter, 0.08);
 	ntsc_filter_init(&p->q_filter, 0.05);
 	p->verbose = NULL;
+	p->filter_width = 16;
+	p->gha = gha_create_ctx(p->filter_width) ;
 	return p;
 }
 
@@ -131,6 +139,7 @@ void ntsc_free_context(ntsc_ctx* ctx)
 	free(ctx->luma);
 	free(ctx->chroma);
 	free(ctx->iq);
+	gha_free_ctx(ctx->gha);
 	free(ctx);
 }
 
@@ -239,15 +248,83 @@ void ntsc_process_encode(const float* input, float* output, ntsc_ctx* ctx)
 	ntsc_next_line(ctx);
 }
 
+static void ntsc_apply_harmonic_filter(float* input, float* chroma, ntsc_ctx* ctx)
+{
+	int i, j;
+	const int blocks = 2 * ctx->width / ctx->filter_width;
+	struct gha_info *info = malloc(sizeof(struct gha_info) * blocks);
+	float *buf = malloc(sizeof(float) * ctx->filter_width);
+	for (i = 0; i < blocks; i++) {
+		size_t to_copy = ctx->filter_width;
+		size_t start = i * ctx->filter_width / 2;
+		if (start + to_copy > ctx->width) {
+			to_copy = ctx->width - start;
+			bzero(buf + to_copy, sizeof(float) * (ctx->filter_width - to_copy));
+		}
+		memcpy(buf, chroma + start, sizeof(float) * to_copy);
+		struct gha_info t[4];
+		gha_extract_many_simple(buf, &t[0], 4, ctx->gha);
+		j = 0;
+		for (; j < 4; j++) {
+			float freq = t[j].frequency;
+			if (freq > 2.0 && freq < 2.3) {
+				break;
+			}
+		}
+		if (j == 4) {
+			bzero(&info[i], sizeof(struct gha_info));
+		} else {
+			memcpy(&info[i], &t[j], sizeof(struct gha_info));
+		}
+	}
+
+	//for (i = 0; i < blocks; i++) {
+		//fprintf(stderr, "%f ", info[i].frequency);
+	//}
+	//fprintf(stderr, "\n");
+	int cont = 1;
+	i = 0;
+	while (cont) {
+		assert(i < blocks);
+		struct gha_info* t = &info[i];
+		if (i == 0) {
+			for (j = 0; j < ctx->filter_width / 4; j++) {
+				input[j] -= t->magnitude * sin(t->frequency * j + t->phase);
+			}
+		}
+		for (j = ctx->filter_width / 4; j < (ctx->filter_width / 2 + ctx->filter_width / 4); j++) {
+			size_t line_pos = i * ctx->filter_width / 2 + j;
+			if (line_pos >= ctx->width) {
+				cont = 0;
+				break;
+			}
+			input[line_pos] -= t->magnitude * sin(t->frequency * j + t->phase);
+		}
+		i++;
+	}
+	free(buf);
+	free(info);
+}
+
 void ntsc_process_decode(const float* input, float* output, ntsc_ctx* ctx)
 {
 	int i;
 
-	for (i = 0; i < ctx->width; i++) {
-		float* l = ctx->luma + i;
-		float* c = ctx->chroma + i;
-		*l = (input[i] + *l) / 2.0;
-		*c = (input[i] - *c) / 2.0;
+	if (ctx->gha == NULL) {
+		for (i = 0; i < ctx->width; i++) {
+			float* l = ctx->luma + i;
+			float* c = ctx->chroma + i;
+			*l = (input[i] + *l) / 2.0;
+			*c = (input[i] - *c) / 2.0;
+		}
+	} else {
+		for (i = 0; i < ctx->width; i++) {
+			float* l = ctx->luma + i;
+			float* c = ctx->chroma + i;
+			*l = input[i];
+			*c = (input[i] - *c) / 2.0;
+		}
+		ntsc_apply_harmonic_filter(ctx->luma, ctx->chroma, ctx);
 	}
 
 	ntsc_demodulate_line(ctx->chroma, ctx);
