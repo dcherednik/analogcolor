@@ -259,7 +259,7 @@ static void ntsc_apply_harmonic_filter(float* input, float* chroma, ntsc_ctx* ct
 		size_t start = i * ctx->filter_width / 2;
 		if (start + to_copy > ctx->width) {
 			to_copy = ctx->width - start;
-			bzero(buf + to_copy, sizeof(float) * (ctx->filter_width - to_copy));
+			memset(buf + to_copy, '\0', sizeof(float) * (ctx->filter_width - to_copy));
 		}
 		memcpy(buf, chroma + start, sizeof(float) * to_copy);
 		struct gha_info t[4];
@@ -272,7 +272,7 @@ static void ntsc_apply_harmonic_filter(float* input, float* chroma, ntsc_ctx* ct
 			}
 		}
 		if (j == 4) {
-			bzero(&info[i], sizeof(struct gha_info));
+			memset(&info[i], '\0', sizeof(struct gha_info));
 		} else {
 			memcpy(&info[i], &t[j], sizeof(struct gha_info));
 		}
